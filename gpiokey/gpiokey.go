@@ -8,11 +8,11 @@ import (
 )
 
 type GpioKey struct {
-	Ch     chan input.Event
-	edge   gpio.Edge
-	active ActiveLevel
-	value  int
-	key    input.Key
+	Ch      chan input.Event
+	trigger gpio.PinTrigger
+	active  ActiveLevel
+	value   int
+	key     input.Key
 }
 
 type ActiveLevel int
@@ -32,28 +32,28 @@ func (act ActiveLevel) Value(value int) int {
 	}
 }
 
-func NewGpioKey(pin gpio.PinReadEdger, active ActiveLevel, keycode input.Key) (key *GpioKey, err error) {
+func NewGpioKey(pin gpio.PinReadTrigger, active ActiveLevel, keycode input.Key) (key *GpioKey, err error) {
 	ch := make(chan input.Event)
 	return NewGpioKeyWithChannel(pin, active, keycode, ch)
 }
 
-func NewGpioKeyWithChannel(pin gpio.PinReadEdger, active ActiveLevel, keycode input.Key, ch chan input.Event) (key *GpioKey, err error) {
+func NewGpioKeyWithChannel(pin gpio.PinReadTrigger, active ActiveLevel, keycode input.Key, ch chan input.Event) (key *GpioKey, err error) {
 	value, err := pin.Read()
 	if err != nil {
 		return nil, err
 	}
 
-	edge, err := pin.Edge(gpio.EdgeBoth)
+	trigger, err := pin.Trigger(gpio.EdgeBoth)
 	if err != nil {
 		return nil, err
 	}
 
 	key = &GpioKey{
-		Ch:     ch,
-		edge:   edge,
-		active: active,
-		value:  value,
-		key:    keycode,
+		Ch:      ch,
+		trigger: trigger,
+		active:  active,
+		value:   value,
+		key:     keycode,
 	}
 	go key.serve()
 	runtime.SetFinalizer(key, (*GpioKey).Close)
@@ -70,7 +70,7 @@ func (key *GpioKey) serve() {
 		case <-timer.C:
 			debounce = false
 
-		case val, ok := <-key.edge.Ch():
+		case val, ok := <-key.trigger.Ch():
 			if !ok {
 				return
 			}
@@ -104,5 +104,5 @@ func (key *GpioKey) serve() {
 }
 
 func (key *GpioKey) Close() error {
-	return key.edge.Close()
+	return key.trigger.Close()
 }
