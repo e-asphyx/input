@@ -3,7 +3,6 @@ package gpiokey
 import (
 	"github.com/e-asphyx/gpio"
 	"github.com/e-asphyx/input"
-	"runtime"
 	"time"
 )
 
@@ -11,7 +10,6 @@ type GpioKey struct {
 	Ch      chan input.Event
 	trigger gpio.PinTrigger
 	active  ActiveLevel
-	value   int
 	key     input.Key
 }
 
@@ -38,12 +36,7 @@ func NewGpioKey(pin gpio.PinReadTrigger, active ActiveLevel, keycode input.Key) 
 }
 
 func NewGpioKeyWithChannel(pin gpio.PinReadTrigger, active ActiveLevel, keycode input.Key, ch chan input.Event) (key *GpioKey, err error) {
-	value, err := pin.Read()
-	if err != nil {
-		return nil, err
-	}
-
-	trigger, err := pin.Trigger(gpio.EdgeBoth)
+	trigger, err := pin.TriggerWithDebounce(gpio.EdgeBoth, gpio.DefaultDebounceInterval)
 	if err != nil {
 		return nil, err
 	}
@@ -52,57 +45,40 @@ func NewGpioKeyWithChannel(pin gpio.PinReadTrigger, active ActiveLevel, keycode 
 		Ch:      ch,
 		trigger: trigger,
 		active:  active,
-		value:   value,
 		key:     keycode,
 	}
-	go key.serve()
-	runtime.SetFinalizer(key, (*GpioKey).Close)
+
+	go func() {
+		for val := range key.trigger.Ch() {
+			var state input.KeyState
+			if key.active.Value(val) == 1 {
+				state = input.KeyPressed
+			} else {
+				state = input.KeyReleased
+			}
+
+			ts := time.Now()
+			keyEvt := &input.KeyEvent{
+				Time:  ts,
+				Key:   key.key,
+				State: state,
+			}
+			key.Ch <- keyEvt
+			key.Ch <- &input.SynEvent{ts}
+		}
+	}()
 
 	return key, nil
 }
 
-func (key *GpioKey) serve() {
-	timer := time.NewTimer(debounceInterval)
-	var debounce bool = false
-
-	for {
-		select {
-		case <-timer.C:
-			debounce = false
-
-		case val, ok := <-key.trigger.Ch():
-			if !ok {
-				return
-			}
-
-			if val != key.value {
-				key.value = val
-
-				if !debounce {
-					var state input.KeyState
-					if key.active.Value(val) == 1 {
-						state = input.KeyPressed
-					} else {
-						state = input.KeyReleased
-					}
-
-					ts := time.Now()
-					keyEvt := &input.KeyEvent{
-						Time:  ts,
-						Key:   key.key,
-						State: state,
-					}
-					key.Ch <- keyEvt
-					key.Ch <- &input.SynEvent{ts}
-
-					debounce = true
-					timer.Reset(debounceInterval)
-				}
-			}
-		}
-	}
-}
-
 func (key *GpioKey) Close() error {
 	return key.trigger.Close()
+}
+
+func (key *GpioKey) Active() ActiveLevel {
+	return key.active
+}
+
+func (key *GpioKey) Key() input.Key {
+	return key.key
 }
